@@ -17,9 +17,11 @@ type Config struct {
 
 // AzureConfig represents the Azure-specific configuration.
 type AzureConfig struct {
-	SubscriptionID string `json:"subscriptionId"`
-	TenantID       string `json:"tenantId"`
-	ClientID       string `json:"clientId"`
+	SubscriptionID   string `json:"subscriptionId"`
+	TenantID         string `json:"tenantId"`
+	ClientID         string `json:"clientId"`
+	ClientSecret     string `json:"clientSecret"`
+	UseAzureIdentity bool   `json:"useAzureIdentity"`
 }
 
 // HubVNetConfig represents the configuration for a hub VNet.
