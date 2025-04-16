@@ -59,3 +59,31 @@ func (e *Enforcer) EnforceAll(ctx context.Context) error {
 	}
 	return nil
 }
+
+// enforceNVARouting makes sure that all subnets using the NVAs as the default route next hop.
+func (e *Enforcer) enforceNVARouting(ctx context.Context, subscriptionID string, hubCFG *config.HubVNetConfig) error {
+	// get all VNets in the subscription
+	vnetsClient, err := e.clientFactory.NewVirtualNeworksClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	// list all VNets in the subscription
+	pager := vnetsClient.NewListAllPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list virtual networks: %w", err)
+		}
+
+		// process each VNet
+		for _, vnet := range page.Value {
+			if err := e.enforceNVARoutingForVNet(...); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TODO: create enforceNVARoutingForVNet for VNet level processing
