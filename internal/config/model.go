@@ -26,10 +26,10 @@ type AzureConfig struct {
 
 // HubVNetConfig represents the configuration for a hub VNet.
 type HubVNetConfig struct {
-	VNetID        string   `json:"vnetId"`
-	ResourceGroup string   `json:"resourceGroup"`
-	Name          string   `json:"name"`
-	NVAIPs        []string `json:"nvaIPs"`
+	VNetID        string `json:"vnetId"`
+	ResourceGroup string `json:"resourceGroup"`
+	Name          string `json:"name"`
+	NVANextHop    string `json:"nvaNextHop"`
 }
 
 // SubscriptionConfig represents the configuration for a subscription.
@@ -84,9 +84,9 @@ func (c *Config) Validate() error {
 
 	// validate NVA IPs
 	for _, hub := range c.Hubs {
-		for _, nvaIP := range hub.NVAIPs {
-			if net.ParseIP(nvaIP) == nil {
-				return fmt.Errorf("invalid NVA IP: %s", nvaIP)
+		if hub.NVANextHop != "" {
+			if net.ParseIP(hub.NVANextHop) == nil {
+				return fmt.Errorf("invalid NVA IP: %s", hub.NVANextHop)
 			}
 		}
 	}
