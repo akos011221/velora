@@ -11,7 +11,7 @@ Velora allows centralized enforcement of the following rules:
 - Restrict direct communication between subnets within the same VNet, requiring traffic to route through the NVA.
 
 ### Peering
-- Enforce that VNets must be peered exclusively with the hub VPC.
+- Enforce that VNets must be peered exclusively with the hub VNet.
 
 ### IP Address Management (IPAM)
 - Restrict VNets to use only IP ranges approved by the central networking team for individual subscriptions.
