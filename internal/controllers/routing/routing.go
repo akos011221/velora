@@ -193,6 +193,158 @@ func (e *Enforcer) enforceNVARoutingForVNet(ctx context.Context, vnetID, vnetNam
 	return nil
 }
 
+// enforceSubnetIsolation makes sures that subnets inside a VNet can't communicate directly.
+func (e *Enforcer) enforceSubnetIsolation(ctx context.Context, subscriptionID string) error {
+	vnetsClient, err := e.clientFactory.NewVirtualNeworksClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	// list all VNets in the subscription
+	pager := vnetsClient.NewListAllPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list virtual networks: %w", err)
+		}
+
+		for _, vnet := range page.Value {
+			if err := e.enforceSubnetIsolationForVNet(ctx, *vnet.ID, *vnet.Name); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// enforceSubnetIsolationForVNet ensures subnets in a VNet can't communicate directly.
+func (e *Enforcer) enforceSubnetIsolationForVNet(ctx context.Context, vnetID, vnetName string) error {
+	parts := extractResourceIDParts(vnetID)
+	if parts["resourceGroups"] == "" {
+		return fmt.Errorf("invalid VNet ID format: %s", vnetID)
+	}
+	resourceGroup := parts["resourceGroups"]
+
+	subnetsClient, err := e.clientFactory.NewSubnetsClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	var allSubnets []*armnetwork.Subnet
+	subnetPager := subnetsClient.NewListPager(resourceGroup, vnetName, nil)
+	for subnetPager.More() {
+		page, err := subnetPager.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list subnets: %w", err)
+		}
+		for _, subnet := range page.Value {
+			if subnet.Name != nil {
+				allSubnets = append(allSubnets, subnet)
+			}
+		}
+	}
+
+	// make sure that each subnet uses the NVA to reach other subnets
+	for _, subnet := range allSubnets {
+		// if subnet doesn't have RT, skip for now
+		// TODO: enforce RTs on all subnets
+		if subnet.Properties.RouteTable == nil {
+			continue
+		}
+
+		rtParts := extractResourceIDParts(*subnet.Properties.RouteTable.ID)
+		rtResourceGroup := rtParts["resourceGroups"]
+		rtName := rtParts["routeTables"]
+
+		routesClient, err := e.clientFactory.NewRoutesClient(ctx)
+		if err != nil {
+			return err
+		}
+
+		// towards each other subnet, check the routing
+		for _, otherSubnet := range allSubnets {
+			// skip the subnet itself
+			if *subnet.Name == *otherSubnet.Name {
+				continue
+			}
+
+			// get the hub's NVA IP
+			var hubCFG *config.HubVNetConfig
+			for _, sub := range e.config.Subscriptions {
+				for _, hub := range e.config.Hubs {
+					if hub.Name == sub.HubName {
+						hubCFG = &hub
+						break
+					}
+				}
+				if hubCFG != nil {
+					break
+				}
+			}
+
+			if hubCFG == nil || hubCFG.NVANextHop == "" {
+				return fmt.Errorf("no hub config with NVA IP found")
+			}
+
+			routeName := fmt.Sprintf("Route-To-%s", *otherSubnet.Name)
+
+			// check if route exists
+			routeExists := false
+			routeCorrect := false
+
+			// get all routes
+			routePager := routesClient.NewListPager(rtResourceGroup, rtName, nil)
+			for routePager.More() {
+				routePage, err := routePager.NextPage(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to list routes: %w", err)
+				}
+
+				for _, route := range routePage.Value {
+					if route.Properties.AddressPrefix != nil && *route.Properties.AddressPrefix == *otherSubnet.Properties.AddressPrefix {
+						routeExists = true
+					}
+
+					// check if the next hop is the NVA
+					if route.Properties.NextHopType != nil && *route.Properties.NextHopType == armnetwork.RouteNextHopTypeVirtualAppliance {
+						if route.Properties.NextHopIPAddress != nil && *route.Properties.NextHopIPAddress == hubCFG.NVANextHop {
+							routeCorrect = true
+							break
+						}
+					}
+					break
+				}
+
+				// create or update the route, if needed
+				if !routeExists || !routeCorrect {
+					nvaNH := hubCFG.NVANextHop
+
+					// parameters for the route
+					nextHopType := armnetwork.RouteNextHopTypeVirtualAppliance
+					addressPrefix := *otherSubnet.Properties.AddressPrefix
+
+					routeParams := armnetwork.Route{
+						Properties: &armnetwork.RoutePropertiesFormat{
+							AddressPrefix:    &addressPrefix,
+							NextHopType:      &nextHopType,
+							NextHopIPAddress: &nvaNH,
+						},
+					}
+
+					_, err := routesClient.BeginCreateOrUpdate(ctx, rtResourceGroup, rtName, routeName, routeParams, nil)
+					if err != nil {
+						return fmt.Errorf("failed to create or update route for subnet %s to %s: %w",
+							*subnet.Name, *otherSubnet.Name, err)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // extractResourceIDParts is a helper to get resource parts from Azure resource ID.
 func extractResourceIDParts(resourceID string) map[string]string {
 	result := make(map[string]string)
